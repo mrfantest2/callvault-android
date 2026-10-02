@@ -9,17 +9,20 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 import win.fantest.callvault.core.calls.CallSessionTracker
-import win.fantest.callvault.core.calls.CallState
 import win.fantest.callvault.core.calls.CallStateMonitor
 import win.fantest.callvault.core.recorder.MicrophoneRecorderEngine
 import win.fantest.callvault.core.recorder.RecorderState
+import win.fantest.callvault.core.storage.RecordingLibrary
 import java.io.File
 
 class MainActivity : Activity() {
     private val recorder by lazy { MicrophoneRecorderEngine(this) }
+    private val library by lazy { RecordingLibrary(this) }
     private val sessionTracker = CallSessionTracker()
+
     private lateinit var statusView: TextView
     private lateinit var callStateView: TextView
+    private lateinit var libraryView: TextView
     private var pendingStart = false
 
     private val callMonitor by lazy {
@@ -48,7 +51,7 @@ class MainActivity : Activity() {
         })
 
         statusView = TextView(this).apply {
-            text = "CP03 call-state core ready"
+            text = "CP04 recording library ready"
             textSize = 18f
         }
         root.addView(statusView)
@@ -58,6 +61,12 @@ class MainActivity : Activity() {
             textSize = 16f
         }
         root.addView(callStateView)
+
+        libraryView = TextView(this).apply {
+            textSize = 16f
+        }
+        root.addView(libraryView)
+        refreshLibrary()
 
         root.addView(Button(this).apply {
             text = "Enable call-state monitor"
@@ -74,7 +83,18 @@ class MainActivity : Activity() {
             setOnClickListener { stopRecording() }
         })
 
+        root.addView(Button(this).apply {
+            text = "Refresh library"
+            setOnClickListener { refreshLibrary() }
+        })
+
         setContentView(root)
+    }
+
+    private fun refreshLibrary() {
+        val activeCount = library.active().size
+        val trashCount = library.trash().size
+        libraryView.text = "Library: " + activeCount + " recordings • Trash: " + trashCount
     }
 
     private fun requestOrStartCallMonitor() {
@@ -123,8 +143,13 @@ class MainActivity : Activity() {
     private fun stopRecording() {
         try {
             val file = recorder.stop()
-            statusView.text =
-                if (file != null) "Saved: " + file.absolutePath else "Recorder is idle"
+            if (file != null) {
+                val entry = library.register(file)
+                statusView.text = "Saved: " + entry.displayName
+                refreshLibrary()
+            } else {
+                statusView.text = "Recorder is idle"
+            }
         } catch (error: Throwable) {
             statusView.text = "Stop failed: " + (error.message ?: error.javaClass.simpleName)
         }
@@ -156,7 +181,8 @@ class MainActivity : Activity() {
         callMonitor.stop()
         if (recorder.state == RecorderState.RECORDING) {
             try {
-                recorder.stop()
+                val file = recorder.stop()
+                if (file != null) library.register(file)
             } catch (_: Throwable) {
                 recorder.cancel()
             }
