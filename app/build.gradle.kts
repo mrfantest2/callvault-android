@@ -9,8 +9,8 @@ android {
         applicationId = "win.fantest.callvault"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.6.0-cp06"
+        versionCode = 7
+        versionName = "0.7.0-cp07"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -20,6 +20,7 @@ android {
         jvmTarget = "17"
     }
 }
+
 
 
 

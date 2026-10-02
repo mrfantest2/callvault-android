@@ -2,8 +2,10 @@
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
+import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
@@ -20,14 +22,17 @@ import win.fantest.callvault.core.calls.CallStateMonitor
 import win.fantest.callvault.core.metadata.SimInventory
 import win.fantest.callvault.core.recorder.MicrophoneRecorderEngine
 import win.fantest.callvault.core.recorder.RecorderState
+import win.fantest.callvault.core.rules.RecordingRulesRepository
 import win.fantest.callvault.core.storage.RecordingEntry
 import win.fantest.callvault.core.storage.RecordingLibrary
+import win.fantest.callvault.service.AutoRecordingService
 import java.io.File
 
 class MainActivity : Activity() {
     private val recorder by lazy { MicrophoneRecorderEngine(this) }
     private val library by lazy { RecordingLibrary(this) }
     private val simInventory by lazy { SimInventory(this) }
+    private val rulesRepository by lazy { RecordingRulesRepository(this) }
     private val sessionTracker = CallSessionTracker()
     private val handler = Handler(Looper.getMainLooper())
 
@@ -94,7 +99,7 @@ class MainActivity : Activity() {
         })
 
         statusView = TextView(this).apply {
-            text = "CP06 SIM/contact metadata ready"
+            text = "CP07 automatic recording ready"
             textSize = 18f
         }
         root.addView(statusView)
@@ -122,6 +127,16 @@ class MainActivity : Activity() {
         root.addView(Button(this).apply {
             text = "Refresh SIM inventory"
             setOnClickListener { requestOrRefreshSims() }
+        })
+
+        root.addView(Button(this).apply {
+            text = "Enable automatic recording"
+            setOnClickListener { enableAutoRecording() }
+        })
+
+        root.addView(Button(this).apply {
+            text = "Disable automatic recording"
+            setOnClickListener { disableAutoRecording() }
         })
 
         root.addView(Button(this).apply {
@@ -176,9 +191,54 @@ class MainActivity : Activity() {
 
         setContentView(scroll)
         renderLibrary()
+
         if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
             refreshSims()
         }
+    }
+
+    private fun enableAutoRecording() {
+        val missing = mutableListOf<String>()
+
+        if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+            missing += Manifest.permission.READ_PHONE_STATE
+        }
+
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            missing += Manifest.permission.RECORD_AUDIO
+        }
+
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            missing += Manifest.permission.POST_NOTIFICATIONS
+        }
+
+        if (missing.isNotEmpty()) {
+            requestPermissions(missing.toTypedArray(), REQUEST_AUTO_RECORDING)
+            return
+        }
+
+        startAutoRecordingService()
+    }
+
+    private fun startAutoRecordingService() {
+        rulesRepository.setEnabled(true)
+        val intent = Intent(this, AutoRecordingService::class.java)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+
+        statusView.text = "Automatic recording enabled"
+    }
+
+    private fun disableAutoRecording() {
+        rulesRepository.setEnabled(false)
+        stopService(Intent(this, AutoRecordingService::class.java))
+        statusView.text = "Automatic recording disabled"
     }
 
     private fun requestOrRefreshSims() {
@@ -196,10 +256,7 @@ class MainActivity : Activity() {
             if (sims.isEmpty()) {
                 "SIMs: unavailable or none active"
             } else {
-                sims.joinToString(
-                    prefix = "SIMs: ",
-                    separator = " • "
-                ) { sim ->
+                sims.joinToString(prefix = "SIMs: ", separator = " • ") { sim ->
                     "slot " + (sim.slotIndex + 1) + " " +
                         (sim.displayName ?: sim.carrierName ?: "SIM")
                 }
@@ -397,16 +454,19 @@ class MainActivity : Activity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
 
         when (requestCode) {
             REQUEST_RECORD_AUDIO -> {
+                val granted =
+                    checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
                 if (granted && pendingStart) startRecording()
                 if (!granted) statusView.text = "Microphone permission is required"
                 pendingStart = false
             }
 
             REQUEST_PHONE_STATE -> {
+                val granted =
+                    checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
                 if (granted) {
                     if (pendingSimRefresh) refreshSims() else startCallMonitor()
                 } else {
@@ -415,12 +475,25 @@ class MainActivity : Activity() {
                     pendingSimRefresh = false
                 }
             }
+
+            REQUEST_AUTO_RECORDING -> {
+                val requiredGranted =
+                    checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED &&
+                        checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+                if (requiredGranted) {
+                    startAutoRecordingService()
+                } else {
+                    statusView.text = "Phone and microphone permissions are required"
+                }
+            }
         }
     }
 
     override fun onDestroy() {
         stopPlayback()
         callMonitor.stop()
+
         if (recorder.state == RecorderState.RECORDING) {
             try {
                 val file = recorder.stop()
@@ -429,6 +502,7 @@ class MainActivity : Activity() {
                 recorder.cancel()
             }
         }
+
         super.onDestroy()
     }
 
@@ -442,5 +516,6 @@ class MainActivity : Activity() {
     companion object {
         private const val REQUEST_RECORD_AUDIO = 40
         private const val REQUEST_PHONE_STATE = 41
+        private const val REQUEST_AUTO_RECORDING = 42
     }
 }
