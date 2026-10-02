@@ -17,6 +17,7 @@ import android.widget.SeekBar
 import android.widget.TextView
 import win.fantest.callvault.core.calls.CallSessionTracker
 import win.fantest.callvault.core.calls.CallStateMonitor
+import win.fantest.callvault.core.metadata.SimInventory
 import win.fantest.callvault.core.recorder.MicrophoneRecorderEngine
 import win.fantest.callvault.core.recorder.RecorderState
 import win.fantest.callvault.core.storage.RecordingEntry
@@ -26,11 +27,13 @@ import java.io.File
 class MainActivity : Activity() {
     private val recorder by lazy { MicrophoneRecorderEngine(this) }
     private val library by lazy { RecordingLibrary(this) }
+    private val simInventory by lazy { SimInventory(this) }
     private val sessionTracker = CallSessionTracker()
     private val handler = Handler(Looper.getMainLooper())
 
     private lateinit var statusView: TextView
     private lateinit var callStateView: TextView
+    private lateinit var simView: TextView
     private lateinit var libraryView: TextView
     private lateinit var listContainer: LinearLayout
     private lateinit var searchInput: EditText
@@ -38,6 +41,7 @@ class MainActivity : Activity() {
     private lateinit var playbackView: TextView
 
     private var pendingStart = false
+    private var pendingSimRefresh = false
     private var currentQuery = ""
     private var player: MediaPlayer? = null
     private var playingEntry: RecordingEntry? = null
@@ -90,7 +94,7 @@ class MainActivity : Activity() {
         })
 
         statusView = TextView(this).apply {
-            text = "CP05 library/player ready"
+            text = "CP06 SIM/contact metadata ready"
             textSize = 18f
         }
         root.addView(statusView)
@@ -101,12 +105,23 @@ class MainActivity : Activity() {
         }
         root.addView(callStateView)
 
+        simView = TextView(this).apply {
+            text = "SIMs: not loaded"
+            textSize = 15f
+        }
+        root.addView(simView)
+
         libraryView = TextView(this).apply { textSize = 16f }
         root.addView(libraryView)
 
         root.addView(Button(this).apply {
             text = "Enable call-state monitor"
             setOnClickListener { requestOrStartCallMonitor() }
+        })
+
+        root.addView(Button(this).apply {
+            text = "Refresh SIM inventory"
+            setOnClickListener { requestOrRefreshSims() }
         })
 
         root.addView(Button(this).apply {
@@ -161,6 +176,35 @@ class MainActivity : Activity() {
 
         setContentView(scroll)
         renderLibrary()
+        if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
+            refreshSims()
+        }
+    }
+
+    private fun requestOrRefreshSims() {
+        if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+            pendingSimRefresh = true
+            requestPermissions(arrayOf(Manifest.permission.READ_PHONE_STATE), REQUEST_PHONE_STATE)
+            return
+        }
+        refreshSims()
+    }
+
+    private fun refreshSims() {
+        val sims = simInventory.activeSubscriptions()
+        simView.text =
+            if (sims.isEmpty()) {
+                "SIMs: unavailable or none active"
+            } else {
+                sims.joinToString(
+                    prefix = "SIMs: ",
+                    separator = " • "
+                ) { sim ->
+                    "slot " + (sim.slotIndex + 1) + " " +
+                        (sim.displayName ?: sim.carrierName ?: "SIM")
+                }
+            }
+        pendingSimRefresh = false
     }
 
     private fun renderLibrary() {
@@ -193,7 +237,8 @@ class MainActivity : Activity() {
 
             card.addView(TextView(this).apply {
                 val duration = entry.durationMs?.let(::formatMs) ?: "unknown"
-                text = "Duration: " + duration + "\n" + entry.filePath
+                val sim = entry.simSubscriptionId?.let { " • SIM " + it } ?: ""
+                text = "Duration: " + duration + sim + "\n" + entry.filePath
                 textSize = 13f
             })
 
@@ -362,8 +407,13 @@ class MainActivity : Activity() {
             }
 
             REQUEST_PHONE_STATE -> {
-                if (granted) startCallMonitor()
-                else callStateView.text = "Phone-state permission is required"
+                if (granted) {
+                    if (pendingSimRefresh) refreshSims() else startCallMonitor()
+                } else {
+                    callStateView.text = "Phone-state permission is required"
+                    simView.text = "SIMs: permission required"
+                    pendingSimRefresh = false
+                }
             }
         }
     }
