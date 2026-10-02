@@ -22,6 +22,7 @@ import android.widget.TextView
 import win.fantest.callvault.core.backup.EncryptedBackupManager
 import win.fantest.callvault.core.calls.CallSessionTracker
 import win.fantest.callvault.core.calls.CallStateMonitor
+import win.fantest.callvault.core.device.DeviceProfile
 import win.fantest.callvault.core.metadata.SimInventory
 import win.fantest.callvault.core.recorder.MicrophoneRecorderEngine
 import win.fantest.callvault.core.recorder.RecorderState
@@ -34,6 +35,7 @@ import java.io.File
 
 class MainActivity : Activity() {
     private val recorder by lazy { MicrophoneRecorderEngine(this) }
+    private val deviceProfile by lazy { DeviceProfile.current() }
     private val backupManager by lazy { EncryptedBackupManager(this) }
     private val library by lazy { RecordingLibrary(this) }
     private val simInventory by lazy { SimInventory(this) }
@@ -111,7 +113,7 @@ class MainActivity : Activity() {
         statusView = TextView(this).apply {
             text =
                 if (purged > 0) "CP08 ready • Purged $purged expired trash item(s)"
-                else "CP08 Trash/Restore ready"
+                else "CP10 ready • " + deviceProfile.summary()
             textSize = 18f
         }
         root.addView(statusView)
@@ -662,4 +664,5 @@ class MainActivity : Activity() {
         private const val REQUEST_AUTO_RECORDING = 42
     }
 }
+
 
