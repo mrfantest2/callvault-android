@@ -3,15 +3,23 @@
 import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
+import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.TextView
 import win.fantest.callvault.core.calls.CallSessionTracker
 import win.fantest.callvault.core.calls.CallStateMonitor
 import win.fantest.callvault.core.recorder.MicrophoneRecorderEngine
 import win.fantest.callvault.core.recorder.RecorderState
+import win.fantest.callvault.core.storage.RecordingEntry
 import win.fantest.callvault.core.storage.RecordingLibrary
 import java.io.File
 
@@ -19,11 +27,34 @@ class MainActivity : Activity() {
     private val recorder by lazy { MicrophoneRecorderEngine(this) }
     private val library by lazy { RecordingLibrary(this) }
     private val sessionTracker = CallSessionTracker()
+    private val handler = Handler(Looper.getMainLooper())
 
     private lateinit var statusView: TextView
     private lateinit var callStateView: TextView
     private lateinit var libraryView: TextView
+    private lateinit var listContainer: LinearLayout
+    private lateinit var searchInput: EditText
+    private lateinit var seekBar: SeekBar
+    private lateinit var playbackView: TextView
+
     private var pendingStart = false
+    private var currentQuery = ""
+    private var player: MediaPlayer? = null
+    private var playingEntry: RecordingEntry? = null
+
+    private val progressUpdater = object : Runnable {
+        override fun run() {
+            val activePlayer = player
+            if (activePlayer != null) {
+                seekBar.max = activePlayer.duration.coerceAtLeast(1)
+                seekBar.progress = activePlayer.currentPosition
+                playbackView.text =
+                    "Playback: " + formatMs(activePlayer.currentPosition.toLong()) +
+                        " / " + formatMs(activePlayer.duration.toLong())
+                handler.postDelayed(this, 500)
+            }
+        }
+    }
 
     private val callMonitor by lazy {
         CallStateMonitor(this) { state ->
@@ -40,10 +71,18 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val scroll = ScrollView(this)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(48, 64, 48, 48)
+            setPadding(36, 48, 36, 48)
         }
+        scroll.addView(
+            root,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
 
         root.addView(TextView(this).apply {
             text = "CallVault"
@@ -51,7 +90,7 @@ class MainActivity : Activity() {
         })
 
         statusView = TextView(this).apply {
-            text = "CP04 recording library ready"
+            text = "CP05 library/player ready"
             textSize = 18f
         }
         root.addView(statusView)
@@ -62,11 +101,8 @@ class MainActivity : Activity() {
         }
         root.addView(callStateView)
 
-        libraryView = TextView(this).apply {
-            textSize = 16f
-        }
+        libraryView = TextView(this).apply { textSize = 16f }
         root.addView(libraryView)
-        refreshLibrary()
 
         root.addView(Button(this).apply {
             text = "Enable call-state monitor"
@@ -83,18 +119,173 @@ class MainActivity : Activity() {
             setOnClickListener { stopRecording() }
         })
 
+        searchInput = EditText(this).apply {
+            hint = "Search recordings, number or notes"
+            setSingleLine(true)
+        }
+        root.addView(searchInput)
+
         root.addView(Button(this).apply {
-            text = "Refresh library"
-            setOnClickListener { refreshLibrary() }
+            text = "Search"
+            setOnClickListener {
+                currentQuery = searchInput.text.toString()
+                renderLibrary()
+            }
         })
 
-        setContentView(root)
+        playbackView = TextView(this).apply {
+            text = "Playback: idle"
+            textSize = 16f
+        }
+        root.addView(playbackView)
+
+        seekBar = SeekBar(this)
+        seekBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) player?.seekTo(progress)
+            }
+            override fun onStartTrackingTouch(bar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(bar: SeekBar?) = Unit
+        })
+        root.addView(seekBar)
+
+        root.addView(Button(this).apply {
+            text = "Stop playback"
+            setOnClickListener { stopPlayback() }
+        })
+
+        listContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        root.addView(listContainer)
+
+        setContentView(scroll)
+        renderLibrary()
     }
 
-    private fun refreshLibrary() {
-        val activeCount = library.active().size
-        val trashCount = library.trash().size
-        libraryView.text = "Library: " + activeCount + " recordings • Trash: " + trashCount
+    private fun renderLibrary() {
+        val entries = library.search(currentQuery)
+        libraryView.text =
+            "Library: " + entries.size + " shown • Trash: " + library.trash().size
+
+        listContainer.removeAllViews()
+
+        if (entries.isEmpty()) {
+            listContainer.addView(TextView(this).apply {
+                text = "No recordings"
+                textSize = 16f
+            })
+            return
+        }
+
+        entries.forEach { entry ->
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, 24, 0, 24)
+            }
+
+            card.addView(TextView(this).apply {
+                val title = entry.displayName ?: File(entry.filePath).name
+                val favorite = if (entry.favorite) " ★" else ""
+                text = title + favorite
+                textSize = 18f
+            })
+
+            card.addView(TextView(this).apply {
+                val duration = entry.durationMs?.let(::formatMs) ?: "unknown"
+                text = "Duration: " + duration + "\n" + entry.filePath
+                textSize = 13f
+            })
+
+            val actions = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+
+            actions.addView(Button(this).apply {
+                text = "Play"
+                setOnClickListener { play(entry) }
+            })
+
+            actions.addView(Button(this).apply {
+                text = if (entry.favorite) "Unfavorite" else "Favorite"
+                setOnClickListener {
+                    library.setFavorite(entry.id, !entry.favorite)
+                    renderLibrary()
+                }
+            })
+
+            actions.addView(Button(this).apply {
+                text = "Trash"
+                setOnClickListener {
+                    if (playingEntry?.id == entry.id) stopPlayback()
+                    library.moveToTrash(entry.id)
+                    renderLibrary()
+                }
+            })
+
+            card.addView(actions)
+
+            val noteEditor = EditText(this).apply {
+                hint = "Note"
+                setText(entry.note ?: "")
+                setSingleLine(true)
+            }
+            card.addView(noteEditor)
+
+            card.addView(Button(this).apply {
+                text = "Save note"
+                setOnClickListener {
+                    library.setNote(entry.id, noteEditor.text.toString())
+                    statusView.text = "Note saved"
+                    renderLibrary()
+                }
+            })
+
+            listContainer.addView(card)
+        }
+    }
+
+    private fun play(entry: RecordingEntry) {
+        stopPlayback()
+
+        val file = File(entry.filePath)
+        if (!file.exists()) {
+            statusView.text = "Missing audio file: " + file.name
+            return
+        }
+
+        try {
+            val newPlayer = MediaPlayer().apply {
+                setDataSource(file.absolutePath)
+                prepare()
+                setOnCompletionListener { stopPlayback() }
+                start()
+            }
+            player = newPlayer
+            playingEntry = entry
+            library.setDuration(entry.id, newPlayer.duration.toLong())
+            playbackView.text = "Playing: " + (entry.displayName ?: file.name)
+            seekBar.max = newPlayer.duration.coerceAtLeast(1)
+            handler.post(progressUpdater)
+        } catch (error: Throwable) {
+            stopPlayback()
+            statusView.text = "Playback failed: " + (error.message ?: error.javaClass.simpleName)
+        }
+    }
+
+    private fun stopPlayback() {
+        handler.removeCallbacks(progressUpdater)
+        player?.let {
+            try {
+                if (it.isPlaying) it.stop()
+            } catch (_: Throwable) {
+            }
+            it.release()
+        }
+        player = null
+        playingEntry = null
+        seekBar.progress = 0
+        playbackView.text = "Playback: idle"
     }
 
     private fun requestOrStartCallMonitor() {
@@ -146,7 +337,7 @@ class MainActivity : Activity() {
             if (file != null) {
                 val entry = library.register(file)
                 statusView.text = "Saved: " + entry.displayName
-                refreshLibrary()
+                renderLibrary()
             } else {
                 statusView.text = "Recorder is idle"
             }
@@ -178,6 +369,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        stopPlayback()
         callMonitor.stop()
         if (recorder.state == RecorderState.RECORDING) {
             try {
@@ -188,6 +380,13 @@ class MainActivity : Activity() {
             }
         }
         super.onDestroy()
+    }
+
+    private fun formatMs(value: Long): String {
+        val totalSeconds = value / 1000
+        val minutes = totalSeconds / 60
+        val seconds = totalSeconds % 60
+        return minutes.toString() + ":" + seconds.toString().padStart(2, '0')
     }
 
     companion object {

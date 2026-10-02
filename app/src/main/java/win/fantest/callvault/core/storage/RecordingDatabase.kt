@@ -2,6 +2,7 @@
 
 import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 
@@ -60,6 +61,33 @@ class RecordingDatabase(context: Context) :
     fun listTrash(): List<RecordingEntry> =
         query("trashed_at IS NOT NULL")
 
+    fun searchActive(search: String): List<RecordingEntry> {
+        val normalized = search.trim()
+        if (normalized.isEmpty()) return listActive()
+        val pattern = "%" + normalized + "%"
+        return query(
+            "trashed_at IS NULL AND (display_name LIKE ? OR phone_number LIKE ? OR note LIKE ? OR file_path LIKE ?)",
+            arrayOf(pattern, pattern, pattern, pattern)
+        )
+    }
+
+    fun updateFavorite(id: String, favorite: Boolean) {
+        val values = ContentValues().apply { put("favorite", if (favorite) 1 else 0) }
+        writableDatabase.update("recordings", values, "id = ?", arrayOf(id))
+    }
+
+    fun updateNote(id: String, note: String?) {
+        val values = ContentValues().apply {
+            if (note.isNullOrBlank()) putNull("note") else put("note", note.trim())
+        }
+        writableDatabase.update("recordings", values, "id = ?", arrayOf(id))
+    }
+
+    fun updateDuration(id: String, durationMs: Long) {
+        val values = ContentValues().apply { put("duration_ms", durationMs) }
+        writableDatabase.update("recordings", values, "id = ?", arrayOf(id))
+    }
+
     fun markTrashed(id: String, atEpochMs: Long = System.currentTimeMillis()) {
         val values = ContentValues().apply { put("trashed_at", atEpochMs) }
         writableDatabase.update("recordings", values, "id = ?", arrayOf(id))
@@ -76,55 +104,58 @@ class RecordingDatabase(context: Context) :
         writableDatabase.delete("recordings", "id = ?", arrayOf(id))
     }
 
-    private fun query(where: String): List<RecordingEntry> {
+    private fun query(
+        where: String,
+        selectionArgs: Array<String>? = null
+    ): List<RecordingEntry> {
         val result = mutableListOf<RecordingEntry>()
         readableDatabase.query(
             "recordings",
             null,
             where,
+            selectionArgs,
             null,
             null,
-            null,
-            "created_at DESC"
+            "favorite DESC, created_at DESC"
         ).use { cursor ->
-            val idIndex = cursor.getColumnIndexOrThrow("id")
-            val pathIndex = cursor.getColumnIndexOrThrow("file_path")
-            val createdIndex = cursor.getColumnIndexOrThrow("created_at")
-            val durationIndex = cursor.getColumnIndexOrThrow("duration_ms")
-            val phoneIndex = cursor.getColumnIndexOrThrow("phone_number")
-            val directionIndex = cursor.getColumnIndexOrThrow("direction")
-            val simIndex = cursor.getColumnIndexOrThrow("sim_subscription_id")
-            val nameIndex = cursor.getColumnIndexOrThrow("display_name")
-            val noteIndex = cursor.getColumnIndexOrThrow("note")
-            val favoriteIndex = cursor.getColumnIndexOrThrow("favorite")
-            val trashIndex = cursor.getColumnIndexOrThrow("trashed_at")
-
             while (cursor.moveToNext()) {
-                result += RecordingEntry(
-                    id = cursor.getString(idIndex),
-                    filePath = cursor.getString(pathIndex),
-                    createdAtEpochMs = cursor.getLong(createdIndex),
-                    durationMs = cursor.longOrNull(durationIndex),
-                    phoneNumber = cursor.stringOrNull(phoneIndex),
-                    direction = cursor.stringOrNull(directionIndex),
-                    simSubscriptionId = cursor.intOrNull(simIndex),
-                    displayName = cursor.stringOrNull(nameIndex),
-                    note = cursor.stringOrNull(noteIndex),
-                    favorite = cursor.getInt(favoriteIndex) == 1,
-                    trashedAtEpochMs = cursor.longOrNull(trashIndex)
-                )
+                result += cursor.toEntry()
             }
         }
         return result
     }
 
-    private fun android.database.Cursor.longOrNull(index: Int): Long? =
+    private fun Cursor.toEntry(): RecordingEntry {
+        val durationIndex = getColumnIndexOrThrow("duration_ms")
+        val phoneIndex = getColumnIndexOrThrow("phone_number")
+        val directionIndex = getColumnIndexOrThrow("direction")
+        val simIndex = getColumnIndexOrThrow("sim_subscription_id")
+        val nameIndex = getColumnIndexOrThrow("display_name")
+        val noteIndex = getColumnIndexOrThrow("note")
+        val trashIndex = getColumnIndexOrThrow("trashed_at")
+
+        return RecordingEntry(
+            id = getString(getColumnIndexOrThrow("id")),
+            filePath = getString(getColumnIndexOrThrow("file_path")),
+            createdAtEpochMs = getLong(getColumnIndexOrThrow("created_at")),
+            durationMs = longOrNull(durationIndex),
+            phoneNumber = stringOrNull(phoneIndex),
+            direction = stringOrNull(directionIndex),
+            simSubscriptionId = intOrNull(simIndex),
+            displayName = stringOrNull(nameIndex),
+            note = stringOrNull(noteIndex),
+            favorite = getInt(getColumnIndexOrThrow("favorite")) == 1,
+            trashedAtEpochMs = longOrNull(trashIndex)
+        )
+    }
+
+    private fun Cursor.longOrNull(index: Int): Long? =
         if (isNull(index)) null else getLong(index)
 
-    private fun android.database.Cursor.intOrNull(index: Int): Int? =
+    private fun Cursor.intOrNull(index: Int): Int? =
         if (isNull(index)) null else getInt(index)
 
-    private fun android.database.Cursor.stringOrNull(index: Int): String? =
+    private fun Cursor.stringOrNull(index: Int): String? =
         if (isNull(index)) null else getString(index)
 
     companion object {

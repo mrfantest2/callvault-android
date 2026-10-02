@@ -20,7 +20,18 @@ class RecordingLibrary(context: Context) {
 
     fun active(): List<RecordingEntry> = database.listActive()
 
+    fun search(query: String): List<RecordingEntry> = database.searchActive(query)
+
     fun trash(): List<RecordingEntry> = database.listTrash()
+
+    fun setFavorite(id: String, favorite: Boolean) =
+        database.updateFavorite(id, favorite)
+
+    fun setNote(id: String, note: String?) =
+        database.updateNote(id, note)
+
+    fun setDuration(id: String, durationMs: Long) =
+        database.updateDuration(id, durationMs)
 
     fun moveToTrash(id: String) = database.markTrashed(id)
 
