@@ -9,8 +9,8 @@ android {
         applicationId = "win.fantest.callvault"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.8.0-cp08"
+        versionCode = 9
+        versionName = "0.9.0-cp09"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -27,3 +27,8 @@ android {
 
 
 
+
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+}

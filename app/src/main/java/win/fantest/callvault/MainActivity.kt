@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.text.InputType
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.os.Build
@@ -18,6 +19,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
+import win.fantest.callvault.core.backup.EncryptedBackupManager
 import win.fantest.callvault.core.calls.CallSessionTracker
 import win.fantest.callvault.core.calls.CallStateMonitor
 import win.fantest.callvault.core.metadata.SimInventory
@@ -32,6 +34,7 @@ import java.io.File
 
 class MainActivity : Activity() {
     private val recorder by lazy { MicrophoneRecorderEngine(this) }
+    private val backupManager by lazy { EncryptedBackupManager(this) }
     private val library by lazy { RecordingLibrary(this) }
     private val simInventory by lazy { SimInventory(this) }
     private val rulesRepository by lazy { RecordingRulesRepository(this) }
@@ -191,6 +194,10 @@ class MainActivity : Activity() {
                 renderLibrary()
             }
         })
+        root.addView(Button(this).apply {
+            text = "Create encrypted portable backup"
+            setOnClickListener { promptForBackupPassphrase() }
+        })
 
         playbackView = TextView(this).apply {
             text = "Playback: idle"
@@ -226,6 +233,46 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun promptForBackupPassphrase() {
+        val input = EditText(this).apply {
+            hint = "Backup passphrase (minimum 6 characters)"
+            inputType =
+                InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Encrypted portable backup")
+            .setMessage("Keep this passphrase safe. It is required to restore the backup on another device.")
+            .setView(input)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Create") { _, _ ->
+                val password = input.text.toString()
+                if (password.length < 6) {
+                    statusView.text = "Backup passphrase must be at least 6 characters"
+                    return@setPositiveButton
+                }
+
+                statusView.text = "Creating encrypted backup..."
+                Thread {
+                    try {
+                        val result =
+                            backupManager.createPortableBackup(password.toCharArray())
+                        runOnUiThread {
+                            statusView.text =
+                                "Encrypted backup: " + result.encryptedFiles +
+                                    " files • " + result.directory
+                        }
+                    } catch (error: Throwable) {
+                        runOnUiThread {
+                            statusView.text =
+                                "Backup failed: " +
+                                    (error.message ?: error.javaClass.simpleName)
+                        }
+                    }
+                }.start()
+            }
+            .show()
+    }
     private fun renderLibrary() {
         val activeEntries =
             if (showTrash) emptyList() else library.search(currentQuery)
@@ -615,3 +662,4 @@ class MainActivity : Activity() {
         private const val REQUEST_AUTO_RECORDING = 42
     }
 }
+
