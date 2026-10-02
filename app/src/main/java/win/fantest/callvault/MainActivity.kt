@@ -2,6 +2,7 @@
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
@@ -22,6 +23,7 @@ import win.fantest.callvault.core.calls.CallStateMonitor
 import win.fantest.callvault.core.metadata.SimInventory
 import win.fantest.callvault.core.recorder.MicrophoneRecorderEngine
 import win.fantest.callvault.core.recorder.RecorderState
+import win.fantest.callvault.core.retention.RetentionPolicyRepository
 import win.fantest.callvault.core.rules.RecordingRulesRepository
 import win.fantest.callvault.core.storage.RecordingEntry
 import win.fantest.callvault.core.storage.RecordingLibrary
@@ -33,6 +35,7 @@ class MainActivity : Activity() {
     private val library by lazy { RecordingLibrary(this) }
     private val simInventory by lazy { SimInventory(this) }
     private val rulesRepository by lazy { RecordingRulesRepository(this) }
+    private val retentionRepository by lazy { RetentionPolicyRepository(this) }
     private val sessionTracker = CallSessionTracker()
     private val handler = Handler(Looper.getMainLooper())
 
@@ -44,10 +47,12 @@ class MainActivity : Activity() {
     private lateinit var searchInput: EditText
     private lateinit var seekBar: SeekBar
     private lateinit var playbackView: TextView
+    private lateinit var modeButton: Button
 
     private var pendingStart = false
     private var pendingSimRefresh = false
     private var currentQuery = ""
+    private var showTrash = false
     private var player: MediaPlayer? = null
     private var playingEntry: RecordingEntry? = null
 
@@ -80,6 +85,8 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val purged = library.purgeExpiredTrash(retentionRepository.trashRetentionDays())
+
         val scroll = ScrollView(this)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -99,7 +106,9 @@ class MainActivity : Activity() {
         })
 
         statusView = TextView(this).apply {
-            text = "CP07 automatic recording ready"
+            text =
+                if (purged > 0) "CP08 ready • Purged $purged expired trash item(s)"
+                else "CP08 Trash/Restore ready"
             textSize = 18f
         }
         root.addView(statusView)
@@ -163,6 +172,26 @@ class MainActivity : Activity() {
             }
         })
 
+        modeButton = Button(this).apply {
+            text = "Open Trash"
+            setOnClickListener {
+                showTrash = !showTrash
+                text = if (showTrash) "Back to Library" else "Open Trash"
+                renderLibrary()
+            }
+        }
+        root.addView(modeButton)
+
+        root.addView(Button(this).apply {
+            text = "Purge expired Trash now"
+            setOnClickListener {
+                val count =
+                    library.purgeExpiredTrash(retentionRepository.trashRetentionDays())
+                statusView.text = "Purged $count expired trash item(s)"
+                renderLibrary()
+            }
+        })
+
         playbackView = TextView(this).apply {
             text = "Playback: idle"
             textSize = 16f
@@ -195,6 +224,156 @@ class MainActivity : Activity() {
         if (checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
             refreshSims()
         }
+    }
+
+    private fun renderLibrary() {
+        val activeEntries =
+            if (showTrash) emptyList() else library.search(currentQuery)
+        val trashEntries = library.trash()
+        val entries = if (showTrash) trashEntries else activeEntries
+
+        libraryView.text =
+            if (showTrash) {
+                "Trash: " + trashEntries.size +
+                    " • Auto-delete after " + retentionRepository.trashRetentionDays() + " days"
+            } else {
+                "Library: " + activeEntries.size + " shown • Trash: " + trashEntries.size
+            }
+
+        listContainer.removeAllViews()
+
+        if (entries.isEmpty()) {
+            listContainer.addView(TextView(this).apply {
+                text = if (showTrash) "Trash is empty" else "No recordings"
+                textSize = 16f
+            })
+            return
+        }
+
+        entries.forEach { entry ->
+            if (showTrash) addTrashCard(entry) else addLibraryCard(entry)
+        }
+    }
+
+    private fun addTrashCard(entry: RecordingEntry) {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 24, 0, 24)
+        }
+
+        card.addView(TextView(this).apply {
+            text = entry.displayName ?: File(entry.filePath).name
+            textSize = 18f
+        })
+
+        card.addView(TextView(this).apply {
+            text = "Moved to Trash: " + (entry.trashedAtEpochMs ?: 0L)
+            textSize = 13f
+        })
+
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        actions.addView(Button(this).apply {
+            text = "Restore"
+            setOnClickListener {
+                library.restore(entry.id)
+                statusView.text = "Recording restored"
+                renderLibrary()
+            }
+        })
+
+        actions.addView(Button(this).apply {
+            text = "Delete forever"
+            setOnClickListener {
+                confirmPermanentDelete(entry)
+            }
+        })
+
+        card.addView(actions)
+        listContainer.addView(card)
+    }
+
+    private fun confirmPermanentDelete(entry: RecordingEntry) {
+        AlertDialog.Builder(this)
+            .setTitle("Delete recording permanently?")
+            .setMessage("This removes the audio file and its library entry. It cannot be restored.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Delete") { _, _ ->
+                library.deletePermanently(entry)
+                statusView.text = "Recording permanently deleted"
+                renderLibrary()
+            }
+            .show()
+    }
+
+    private fun addLibraryCard(entry: RecordingEntry) {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 24, 0, 24)
+        }
+
+        card.addView(TextView(this).apply {
+            val title = entry.displayName ?: File(entry.filePath).name
+            val favorite = if (entry.favorite) " ★" else ""
+            text = title + favorite
+            textSize = 18f
+        })
+
+        card.addView(TextView(this).apply {
+            val duration = entry.durationMs?.let(::formatMs) ?: "unknown"
+            val sim = entry.simSubscriptionId?.let { " • SIM " + it } ?: ""
+            text = "Duration: " + duration + sim + "\n" + entry.filePath
+            textSize = 13f
+        })
+
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
+        actions.addView(Button(this).apply {
+            text = "Play"
+            setOnClickListener { play(entry) }
+        })
+
+        actions.addView(Button(this).apply {
+            text = if (entry.favorite) "Unfavorite" else "Favorite"
+            setOnClickListener {
+                library.setFavorite(entry.id, !entry.favorite)
+                renderLibrary()
+            }
+        })
+
+        actions.addView(Button(this).apply {
+            text = "Trash"
+            setOnClickListener {
+                if (playingEntry?.id == entry.id) stopPlayback()
+                library.moveToTrash(entry.id)
+                statusView.text = "Moved to Trash"
+                renderLibrary()
+            }
+        })
+
+        card.addView(actions)
+
+        val noteEditor = EditText(this).apply {
+            hint = "Note"
+            setText(entry.note ?: "")
+            setSingleLine(true)
+        }
+        card.addView(noteEditor)
+
+        card.addView(Button(this).apply {
+            text = "Save note"
+            setOnClickListener {
+                library.setNote(entry.id, noteEditor.text.toString())
+                statusView.text = "Note saved"
+                renderLibrary()
+            }
+        })
+
+        listContainer.addView(card)
     }
 
     private fun enableAutoRecording() {
@@ -262,89 +441,6 @@ class MainActivity : Activity() {
                 }
             }
         pendingSimRefresh = false
-    }
-
-    private fun renderLibrary() {
-        val entries = library.search(currentQuery)
-        libraryView.text =
-            "Library: " + entries.size + " shown • Trash: " + library.trash().size
-
-        listContainer.removeAllViews()
-
-        if (entries.isEmpty()) {
-            listContainer.addView(TextView(this).apply {
-                text = "No recordings"
-                textSize = 16f
-            })
-            return
-        }
-
-        entries.forEach { entry ->
-            val card = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(0, 24, 0, 24)
-            }
-
-            card.addView(TextView(this).apply {
-                val title = entry.displayName ?: File(entry.filePath).name
-                val favorite = if (entry.favorite) " ★" else ""
-                text = title + favorite
-                textSize = 18f
-            })
-
-            card.addView(TextView(this).apply {
-                val duration = entry.durationMs?.let(::formatMs) ?: "unknown"
-                val sim = entry.simSubscriptionId?.let { " • SIM " + it } ?: ""
-                text = "Duration: " + duration + sim + "\n" + entry.filePath
-                textSize = 13f
-            })
-
-            val actions = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-            }
-
-            actions.addView(Button(this).apply {
-                text = "Play"
-                setOnClickListener { play(entry) }
-            })
-
-            actions.addView(Button(this).apply {
-                text = if (entry.favorite) "Unfavorite" else "Favorite"
-                setOnClickListener {
-                    library.setFavorite(entry.id, !entry.favorite)
-                    renderLibrary()
-                }
-            })
-
-            actions.addView(Button(this).apply {
-                text = "Trash"
-                setOnClickListener {
-                    if (playingEntry?.id == entry.id) stopPlayback()
-                    library.moveToTrash(entry.id)
-                    renderLibrary()
-                }
-            })
-
-            card.addView(actions)
-
-            val noteEditor = EditText(this).apply {
-                hint = "Note"
-                setText(entry.note ?: "")
-                setSingleLine(true)
-            }
-            card.addView(noteEditor)
-
-            card.addView(Button(this).apply {
-                text = "Save note"
-                setOnClickListener {
-                    library.setNote(entry.id, noteEditor.text.toString())
-                    statusView.text = "Note saved"
-                    renderLibrary()
-                }
-            })
-
-            listContainer.addView(card)
-        }
     }
 
     private fun play(entry: RecordingEntry) {

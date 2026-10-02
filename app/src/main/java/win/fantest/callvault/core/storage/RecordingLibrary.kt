@@ -4,6 +4,7 @@ import android.content.Context
 import win.fantest.callvault.core.calls.CallSession
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 class RecordingLibrary(context: Context) {
     private val database = RecordingDatabase(context.applicationContext)
@@ -46,5 +47,12 @@ class RecordingLibrary(context: Context) {
     fun deletePermanently(entry: RecordingEntry) {
         File(entry.filePath).delete()
         database.deletePermanently(entry.id)
+    }
+
+    fun purgeExpiredTrash(retentionDays: Int, nowEpochMs: Long = System.currentTimeMillis()): Int {
+        val cutoff = nowEpochMs - TimeUnit.DAYS.toMillis(retentionDays.coerceAtLeast(1).toLong())
+        val expired = trash().filter { (it.trashedAtEpochMs ?: Long.MAX_VALUE) <= cutoff }
+        expired.forEach(::deletePermanently)
+        return expired.size
     }
 }

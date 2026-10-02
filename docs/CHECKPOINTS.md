@@ -8,7 +8,7 @@ Each verified checkpoint is committed and tagged. A checkpoint is only marked ve
 - CP04: recording library — VERIFIED, tag cp04-recording-library.
 - CP05: playback, seek, favorites, notes and search — VERIFIED, tag cp05-library-player.
 - CP06: SIM inventory and contact metadata abstraction — VERIFIED, tag cp06-sim-contact-metadata.
-- CP07: explicit foreground automatic recording and rules — in progress.
-- CP08: Trash/Restore UI and retention — pending.
+- CP07: explicit foreground automatic recording and rules — VERIFIED, tag cp07-auto-recording.
+- CP08: Trash/Restore UI, permanent-delete confirmation and retention cleanup — in progress.
 - CP09: encryption and backup — pending.
 - CP10: Samsung S25 validation and tuning — pending.
