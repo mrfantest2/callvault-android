@@ -113,7 +113,7 @@ class MainActivity : Activity() {
         statusView = TextView(this).apply {
             text =
                 if (purged > 0) "CP08 ready • Purged $purged expired trash item(s)"
-                else "CP10 ready • " + deviceProfile.summary()
+                else "CP11 ready • " + deviceProfile.summary()
             textSize = 18f
         }
         root.addView(statusView)
@@ -664,5 +664,6 @@ class MainActivity : Activity() {
         private const val REQUEST_AUTO_RECORDING = 42
     }
 }
+
 
 

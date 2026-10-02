@@ -12,4 +12,5 @@ Each verified checkpoint is committed and tagged. A checkpoint is only marked ve
 - CP08: Trash/Restore UI, permanent-delete confirmation and retention cleanup — VERIFIED, tag cp08-trash-restore.
 - CP09: portable AES-GCM encrypted backups + Android Keystore local-vault key — VERIFIED, tag cp09-encrypted-backup.
 - CP10: Samsung S25 Ultra API-36 physical-device validation — VERIFIED, tag cp10-s25-validated.
+- CP11: Play/Full release separation and production CI gate — VERIFIED, tag cp11-release-channels.
 
